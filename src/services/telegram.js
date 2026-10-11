@@ -69,38 +69,41 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
   return msg.message_id;
 }
 
+// In a group several people see the same alert, so the first tap wins and the
+// message is stamped with who handled it.
+async function resolveAlert(ctx, { status, metric, label }) {
+  const tweetId = ctx.match[1];
+  const message = ctx.callbackQuery.message;
+  const tweet = getTweetByTelegramMessageId(message.message_id);
+  if (!tweet) {
+    await ctx.answerCbQuery('Tweet not found');
+    return;
+  }
+  if (tweet.status !== 'notified') {
+    await ctx.answerCbQuery('Someone already handled this one');
+    return;
+  }
+
+  updateStatus(tweetId, status);
+  incrementMetric(metric);
+
+  const who = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  await ctx.editMessageText(`${message.text}\n\n${label} by ${who}`, {
+    link_preview_options: { is_disabled: true },
+  });
+  await ctx.answerCbQuery(label);
+  logger.info({ tweetId, status, by: who }, 'Alert handled');
+}
+
 function setupCallbacks() {
-  bot.action(/^replied:(.+)$/, async (ctx) => {
-    const tweetId = ctx.match[1];
-    const tweet = getTweetByTelegramMessageId(ctx.callbackQuery.message.message_id);
-    if (!tweet) {
-      await ctx.answerCbQuery('Tweet not found');
-      return;
-    }
-    updateStatus(tweetId, 'replied');
-    incrementMetric('replied');
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.answerCbQuery('Marked as replied ✅');
-    logger.info({ tweetId }, 'Tweet marked as replied');
-  });
+  bot.action(/^replied:(.+)$/, (ctx) =>
+    resolveAlert(ctx, { status: 'replied', metric: 'replied', label: '✅ Replied' }));
 
-  bot.action(/^skip:(.+)$/, async (ctx) => {
-    const tweetId = ctx.match[1];
-    updateStatus(tweetId, 'skipped');
-    incrementMetric('skipped');
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.answerCbQuery('Skipped ⏭');
-    logger.info({ tweetId }, 'Tweet skipped');
-  });
+  bot.action(/^skip:(.+)$/, (ctx) =>
+    resolveAlert(ctx, { status: 'skipped', metric: 'skipped', label: '⏭ Skipped' }));
 
-  bot.action(/^false:(.+)$/, async (ctx) => {
-    const tweetId = ctx.match[1];
-    updateStatus(tweetId, 'not_complaint');
-    incrementMetric('false_positives');
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.answerCbQuery('Marked as not a complaint ❌');
-    logger.info({ tweetId }, 'Tweet marked as false positive');
-  });
+  bot.action(/^false:(.+)$/, (ctx) =>
+    resolveAlert(ctx, { status: 'not_complaint', metric: 'false_positives', label: '❌ Not a complaint' }));
 }
 
 function setupCommands() {
@@ -112,6 +115,10 @@ function setupCommands() {
   bot.command('status', async (ctx) => {
     const pending = getPendingCount();
     await ctx.reply(`📊 Pending complaints: ${pending}\n🔄 Polling: ${paused ? 'PAUSED' : 'ACTIVE'}`);
+  });
+
+  bot.command('chatid', async (ctx) => {
+    await ctx.reply(`Chat ID: ${ctx.chat.id}`);
   });
 
   bot.command('pause', async (ctx) => {
