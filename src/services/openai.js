@@ -10,23 +10,25 @@ const systemPrompt = readFileSync(
   'utf-8'
 );
 
-export async function classifyTweet(tweetText) {
+export async function classifyTweet(tweet) {
+  const userContent = `Author bio: ${tweet.authorDescription || '(none)'}\n\nTweet: ${tweet.text}`;
+
   try {
     const response = await openai.chat.completions.create({
       model: config.openai.model,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: tweetText },
+        { role: 'user', content: userContent },
       ],
-      temperature: 0.1,
-      max_tokens: 200,
+      // GPT-5 models reject custom temperature and count reasoning tokens here
+      max_completion_tokens: 4000,
     });
 
     const content = response.choices[0].message.content;
     const result = JSON.parse(content);
 
-    logger.debug({ tweetText: tweetText.slice(0, 80), result }, 'Classification result');
+    logger.debug({ tweetText: tweet.text.slice(0, 80), result }, 'Classification result');
     return result;
   } catch (err) {
     logger.error({ err: err.message }, 'Classification failed');

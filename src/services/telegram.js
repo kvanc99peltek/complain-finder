@@ -15,32 +15,55 @@ export function isPaused() {
 
 const SEVERITY_EMOJI = { low: '🟡', medium: '🟠', high: '🔴' };
 
-export async function sendNotification(tweet) {
+function replyIntentUrl(tweet) {
+  const params = new URLSearchParams({ in_reply_to: tweet.id });
+  if (tweet.suggestedReply) params.set('text', tweet.suggestedReply);
+  return `https://twitter.com/intent/tweet?${params}`;
+}
+
+// replyTo threads the alert under an earlier one for the same X conversation;
+// silent skips the phone notification so a busy thread pings only once.
+export async function sendNotification(tweet, { replyTo, silent = false } = {}) {
   const emoji = SEVERITY_EMOJI[tweet.severity] || '⚪';
   const intentLabel = (tweet.intent || 'other').toUpperCase();
   const severityLabel = (tweet.severity || 'unknown').toUpperCase();
-  const bucketLabels = { onboarding: 'Onboarding Issues', payment: 'Payment Failures', support: 'Support Frustration' };
+  const fitLabel = (tweet.fit || 'unknown').toUpperCase();
 
-  const text = [
+  const lines = [
     `${emoji} Bill.com Complaint [${intentLabel} | ${severityLabel}]`,
     '',
     `👤 @${tweet.authorUsername} (${Number(tweet.followersCount).toLocaleString()} followers)`,
+  ];
+  if (tweet.authorDescription) lines.push(`🪪 ${tweet.authorDescription}`);
+  lines.push(
     `📝 "${tweet.text}"`,
     '',
-    `🔗 View tweet: https://twitter.com/${tweet.authorUsername}/status/${tweet.id}`,
-    `🏷 Bucket: ${bucketLabels[tweet.searchBucket] || tweet.searchBucket}`,
-    `💡 "${tweet.reasoning || 'No reasoning provided'}"`,
-  ].join('\n');
+    `🎯 Cleo fit: ${fitLabel}${tweet.fitReason ? `: ${tweet.fitReason}` : ''}`,
+    `💡 ${tweet.reasoning || 'No reasoning provided'}`,
+    '',
+    `🔗 Tweet: https://twitter.com/${tweet.authorUsername}/status/${tweet.id}`,
+  );
+  if (tweet.conversationId && tweet.conversationId !== tweet.id) {
+    lines.push(`🧵 Thread: https://twitter.com/i/status/${tweet.conversationId}`);
+  }
+  if (tweet.suggestedReply) {
+    lines.push('', '✍️ Draft reply:', tweet.suggestedReply);
+  }
 
   const keyboard = Markup.inlineKeyboard([
-    Markup.button.callback('✅ Mark Replied', `replied:${tweet.id}`),
-    Markup.button.callback('⏭ Skip', `skip:${tweet.id}`),
-    Markup.button.callback('❌ Not a Complaint', `false:${tweet.id}`),
+    [Markup.button.url('↩️ Reply on X', replyIntentUrl(tweet))],
+    [
+      Markup.button.callback('✅ Mark Replied', `replied:${tweet.id}`),
+      Markup.button.callback('⏭ Skip', `skip:${tweet.id}`),
+      Markup.button.callback('❌ Not a Complaint', `false:${tweet.id}`),
+    ],
   ]);
 
-  const msg = await bot.telegram.sendMessage(chatId, text, {
+  const msg = await bot.telegram.sendMessage(chatId, lines.join('\n'), {
     ...keyboard,
     disable_web_page_preview: true,
+    disable_notification: silent,
+    ...(replyTo && { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }),
   });
 
   return msg.message_id;

@@ -20,13 +20,13 @@ const config = Object.freeze({
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    model: process.env.OPENAI_MODEL || 'gpt-5.4-mini',
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID,
   },
-  pollIntervalMinutes: parseInt(process.env.POLL_INTERVAL_MINUTES || '3', 10),
+  pollIntervalMinutes: parseInt(process.env.POLL_INTERVAL_MINUTES || '30', 10),
   minSeverity: process.env.MIN_SEVERITY || 'medium',
   dbPath: process.env.DB_PATH || './data/complain-finder.db',
   logLevel: process.env.LOG_LEVEL || 'info',

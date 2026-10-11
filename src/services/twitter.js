@@ -5,10 +5,10 @@ import { getLastSinceId } from '../db/queries.js';
 
 const client = new TwitterApi(config.twitter.bearerToken).readOnly.v2;
 
+// Broad on purpose: complaints mostly arrive as replies in threads and rarely use
+// a predictable keyword, so the classifier decides what counts, not the query.
 const BUCKETS = {
-  onboarding: `("bill.com" OR "@billcom") (onboarding OR "sign up" OR signup OR verify OR verification OR "get started" OR "can't register" OR "won't let me") -is:retweet -is:reply lang:en`,
-  payment: `("bill.com" OR "@billcom") (payment OR "not working" OR failed OR "can't pay" OR "can't receive" OR "didn't go through" OR charged OR overcharged OR "where is my money" OR delayed) -is:retweet -is:reply lang:en`,
-  support: `("bill.com" OR "@billcom") (support OR "no response" OR "customer service" OR "won't help" OR terrible OR awful OR worst OR hate OR frustrated OR ridiculous OR useless) -is:retweet -is:reply lang:en`,
+  billcom: `("bill.com" OR @billcom OR billcom OR "bill dot com") -is:retweet lang:en`,
 };
 
 function normalizeTweet(tweet, includes, bucket) {
@@ -18,11 +18,33 @@ function normalizeTweet(tweet, includes, bucket) {
     authorId: tweet.author_id,
     authorUsername: author.username || 'unknown',
     authorName: author.name || 'Unknown',
+    authorDescription: author.description || '',
     followersCount: author.public_metrics?.followers_count || 0,
     text: tweet.text,
     createdAt: tweet.created_at,
+    conversationId: tweet.conversation_id || tweet.id,
     searchBucket: bucket,
   };
+}
+
+export async function searchQuery(query, bucket, sinceId) {
+  const params = {
+    max_results: 100,
+    'tweet.fields': 'author_id,created_at,text,conversation_id',
+    'user.fields': 'username,name,description,public_metrics',
+    expansions: 'author_id',
+  };
+  if (sinceId) params.since_id = sinceId;
+
+  const result = await client.search(query, params);
+  const tweets = result.data?.data || [];
+  const includes = result.data?.includes || {};
+
+  if (result.data?.meta?.next_token) {
+    logger.warn({ bucket }, 'More than 100 new tweets since last poll; older ones were not fetched');
+  }
+
+  return tweets.map((tweet) => normalizeTweet(tweet, includes, bucket));
 }
 
 export async function searchByBucket() {
@@ -31,24 +53,12 @@ export async function searchByBucket() {
 
   for (const [bucket, query] of Object.entries(BUCKETS)) {
     try {
-      const sinceId = getLastSinceId(bucket);
-      const params = {
-        max_results: 10,
-        'tweet.fields': 'author_id,created_at,text',
-        'user.fields': 'username,name,public_metrics',
-        expansions: 'author_id',
-      };
-      if (sinceId) params.since_id = sinceId;
-
-      const result = await client.search(query, params);
-
-      const tweets = result.data?.data || [];
-      const includes = result.data?.includes || {};
+      const tweets = await searchQuery(query, bucket, getLastSinceId(bucket));
 
       for (const tweet of tweets) {
         if (seenIds.has(tweet.id)) continue;
         seenIds.add(tweet.id);
-        allTweets.push(normalizeTweet(tweet, includes, bucket));
+        allTweets.push(tweet);
       }
 
       logger.info({ bucket, count: tweets.length }, 'Search completed');
