@@ -8,12 +8,13 @@
     "dev": "node src/index.js | pino-pretty",
     "test:twitter": "node scripts/test-twitter.js",
     "test:openai": "node scripts/test-openai.js",
-    "test:telegram": "node scripts/test-telegram.js"
+    "test:telegram": "node scripts/test-telegram.js",
+    "dry-run": "node scripts/dry-run.js"
   },
   "type": "module",
   "license": "PRIVATE",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
@@ -27,5 +28,8 @@
   },
   "devDependencies": {
     "puppeteer-core": "^24.42.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.9.0": true
   }
 }

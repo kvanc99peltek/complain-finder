@@ -14,12 +14,26 @@ export function initDatabase() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  const migrationPath = new URL('./migrations/001_initial.sql', import.meta.url);
-  const migration = readFileSync(migrationPath, 'utf-8');
-  db.exec(migration);
+  runMigrations();
 
   logger.info({ dbPath }, 'Database initialized');
   return db;
+}
+
+// Applied in order; PRAGMA user_version records how many have run.
+// 001 is idempotent, so databases created before versioning start at 0 safely.
+const MIGRATIONS = ['001_initial.sql', '002_threads_fit_reply.sql'];
+
+function runMigrations() {
+  const applied = db.pragma('user_version', { simple: true });
+  for (let i = applied; i < MIGRATIONS.length; i++) {
+    const sql = readFileSync(new URL(`./migrations/${MIGRATIONS[i]}`, import.meta.url), 'utf-8');
+    db.transaction(() => {
+      db.exec(sql);
+      db.pragma(`user_version = ${i + 1}`);
+    })();
+    logger.info({ migration: MIGRATIONS[i] }, 'Migration applied');
+  }
 }
 
 export function getDb() {

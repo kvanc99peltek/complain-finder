@@ -1,7 +1,14 @@
 import { searchByBucket } from '../services/twitter.js';
 import { classifyTweet } from '../services/openai.js';
 import { sendNotification, isPaused } from '../services/telegram.js';
-import { saveTweet, hasSeenTweet, updateClassification, updateStatus, incrementMetric } from '../db/queries.js';
+import {
+  saveTweet,
+  hasSeenTweet,
+  updateClassification,
+  updateStatus,
+  incrementMetric,
+  getThreadAlertMessageId,
+} from '../db/queries.js';
 import config from '../config.js';
 import logger from '../utils/logger.js';
 
@@ -49,34 +56,50 @@ export async function runPollCycle() {
       return;
     }
 
-    // 3. Classify and notify new tweets only
+    // 3. Classify every new tweet before notifying, so complaints can be grouped by thread
+    const qualified = [];
     for (const tweet of newTweets) {
       try {
-        const classification = await classifyTweet(tweet.text);
+        const classification = await classifyTweet(tweet);
         updateClassification(tweet.id, classification);
 
         if (classification.isComplaint) {
           incrementMetric('complaints_found');
         }
 
-        // 4. Filter and notify
         if (classification.isComplaint && meetsMinSeverity(classification.severity)) {
           incrementMetric('qualified_complaints');
-
-          const enrichedTweet = { ...tweet, ...classification };
-          const telegramMsgId = await sendNotification(enrichedTweet);
-          updateStatus(tweet.id, 'notified', { telegramMessageId: telegramMsgId });
-          incrementMetric('notified');
-
-          logger.info(
-            { tweetId: tweet.id, severity: classification.severity, intent: classification.intent },
-            'Complaint notified'
-          );
+          qualified.push({ ...tweet, ...classification });
         }
       } catch (err) {
         updateStatus(tweet.id, 'error', { errorMessage: err.message });
         incrementMetric('errors');
-        logger.error({ tweetId: tweet.id, err: err.message }, 'Failed to process tweet');
+        logger.error({ tweetId: tweet.id, err: err.message }, 'Failed to classify tweet');
+      }
+    }
+
+    // 4. One ping per X thread: the first complaint alerts, the rest reply to it silently
+    const byThread = Map.groupBy(qualified, (tweet) => tweet.conversationId);
+    for (const [conversationId, threadTweets] of byThread) {
+      threadTweets.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+      let replyTo = getThreadAlertMessageId(conversationId);
+
+      for (const tweet of threadTweets) {
+        try {
+          const telegramMsgId = await sendNotification(tweet, { replyTo, silent: Boolean(replyTo) });
+          replyTo ??= telegramMsgId;
+          updateStatus(tweet.id, 'notified', { telegramMessageId: telegramMsgId });
+          incrementMetric('notified');
+
+          logger.info(
+            { tweetId: tweet.id, severity: tweet.severity, intent: tweet.intent, fit: tweet.fit },
+            'Complaint notified'
+          );
+        } catch (err) {
+          updateStatus(tweet.id, 'error', { errorMessage: err.message });
+          incrementMetric('errors');
+          logger.error({ tweetId: tweet.id, err: err.message }, 'Failed to notify tweet');
+        }
       }
     }
 
