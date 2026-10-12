@@ -1,7 +1,7 @@
 import { Telegraf, Markup } from 'telegraf';
 import config from '../config.js';
 import logger from '../utils/logger.js';
-import { getTweetByTelegramMessageId, updateStatus, incrementMetric, getPendingCount } from '../db/queries.js';
+import { getTweetById, updateStatus, incrementMetric, getPendingCount } from '../db/queries.js';
 import { formatDailyStats } from '../utils/metrics.js';
 
 const bot = new Telegraf(config.telegram.botToken);
@@ -74,7 +74,9 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
 async function resolveAlert(ctx, { status, metric, label }) {
   const tweetId = ctx.match[1];
   const message = ctx.callbackQuery.message;
-  const tweet = getTweetByTelegramMessageId(message.message_id);
+  // Message IDs are per chat and restart when a group becomes a supergroup,
+  // so look the alert up by the tweet ID carried in the button.
+  const tweet = getTweetById(tweetId);
   if (!tweet) {
     await ctx.answerCbQuery('Tweet not found');
     return;

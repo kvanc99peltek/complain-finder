@@ -64,8 +64,8 @@ export function updateStatus(tweetId, status, extra = {}) {
   return getDb().prepare(`UPDATE tweets SET ${sets.join(', ')} WHERE id = @id`).run(params);
 }
 
-export function getTweetByTelegramMessageId(messageId) {
-  return getDb().prepare('SELECT * FROM tweets WHERE telegram_message_id = ?').get(messageId);
+export function getTweetById(tweetId) {
+  return getDb().prepare('SELECT * FROM tweets WHERE id = ?').get(tweetId);
 }
 
 // Telegram message of the first alert sent for a thread, so later complaints
