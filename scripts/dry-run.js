@@ -1,11 +1,14 @@
 // Search and classify without touching the database or Telegram.
-// Usage: npm run dry-run              (the bot's own queries, last 7 days)
-//        npm run dry-run -- '<query>' (any X search query)
+// Usage: npm run dry-run                         (the bot's own queries, last 7 days)
+//        npm run dry-run -- quickbooks           (one competitor's query)
+//        npm run dry-run -- quickbooks '<query>' (any X search query, classified as that competitor)
 import { searchQuery, BUCKETS } from '../src/services/twitter.js';
 import { classifyTweet } from '../src/services/openai.js';
 import { findLinkedIn } from '../src/services/linkedin.js';
 
-const queries = process.argv[2] ? { custom: process.argv[2] } : BUCKETS;
+const [bucket, customQuery] = process.argv.slice(2);
+if (bucket && !BUCKETS[bucket]) throw new Error(`Unknown competitor "${bucket}". Use one of: ${Object.keys(BUCKETS).join(', ')}`);
+const queries = bucket ? { [bucket]: customQuery || BUCKETS[bucket] } : BUCKETS;
 
 for (const [bucket, query] of Object.entries(queries)) {
   const tweets = await searchQuery(query, bucket);

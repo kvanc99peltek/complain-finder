@@ -2,15 +2,14 @@ import { TwitterApi } from 'twitter-api-v2';
 import config from '../config.js';
 import logger from '../utils/logger.js';
 import { getLastSinceId } from '../db/queries.js';
+import COMPETITORS from '../competitors.js';
 
 const client = new TwitterApi(config.twitter.bearerToken).readOnly.v2;
 
-// Broad on purpose: complaints mostly arrive as replies in threads and rarely use
-// a predictable keyword, so the classifier decides what counts, not the query.
 const excludeOurs = config.excludeAuthors.map((handle) => ` -from:${handle}`).join('');
-const BUCKETS = {
-  billcom: `("bill.com" OR @billcom OR billcom OR "bill dot com") -is:retweet lang:en${excludeOurs}`,
-};
+const BUCKETS = Object.fromEntries(
+  Object.entries(COMPETITORS).map(([bucket, c]) => [bucket, `${c.search} -is:retweet lang:en${excludeOurs}`])
+);
 
 // Expanded links from the profile's website field and bio
 function profileLinks(author) {
@@ -35,6 +34,8 @@ function normalizeTweet(tweet, includes, bucket) {
   };
 }
 
+const MAX_PAGES = 5;
+
 export async function searchQuery(query, bucket, sinceId) {
   const params = {
     max_results: 100,
@@ -45,14 +46,19 @@ export async function searchQuery(query, bucket, sinceId) {
   if (sinceId) params.since_id = sinceId;
 
   const result = await client.search(query, params);
-  const tweets = result.data?.data || [];
-  const includes = result.data?.includes || {};
 
-  if (result.data?.meta?.next_token) {
-    logger.warn({ bucket }, 'More than 100 new tweets since last poll; older ones were not fetched');
+  // Busy searches pile up past 100 during the overnight pause, so page through
+  // them. Without a since_id (first run) one page is enough of the backlog.
+  if (sinceId) {
+    for (let page = 1; page < MAX_PAGES && !result.done; page++) {
+      await result.fetchNext();
+    }
+  }
+  if (sinceId && !result.done) {
+    logger.warn({ bucket }, 'More new tweets than one poll fetches; older ones were not fetched');
   }
 
-  return tweets.map((tweet) => normalizeTweet(tweet, includes, bucket));
+  return result.tweets.map((tweet) => normalizeTweet(tweet, result.includes, bucket));
 }
 
 export async function searchByBucket() {

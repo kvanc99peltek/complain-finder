@@ -13,12 +13,19 @@ import {
 } from '../db/queries.js';
 import config from '../config.js';
 import logger from '../utils/logger.js';
+import COMPETITORS from '../competitors.js';
 
 const SEVERITY_RANK = { low: 1, medium: 2, high: 3 };
+const FIT_RANK = { low: 1, medium: 2, high: 3 };
 
 function meetsMinSeverity(severity) {
   const min = SEVERITY_RANK[config.minSeverity] || 2;
   return (SEVERITY_RANK[severity] || 0) >= min;
+}
+
+function meetsMinFit(tweet, fit) {
+  const min = FIT_RANK[COMPETITORS[tweet.searchBucket]?.minFit] || 1;
+  return (FIT_RANK[fit] || 0) >= min;
 }
 
 // Paid lookup, so only for leads worth contacting. Never blocks the alert.
@@ -83,7 +90,11 @@ export async function runPollCycle() {
           incrementMetric('complaints_found');
         }
 
-        if (classification.isComplaint && meetsMinSeverity(classification.severity)) {
+        if (
+          classification.isComplaint &&
+          meetsMinSeverity(classification.severity) &&
+          meetsMinFit(tweet, classification.fit)
+        ) {
           incrementMetric('qualified_complaints');
           qualified.push({ ...tweet, ...classification });
         }
