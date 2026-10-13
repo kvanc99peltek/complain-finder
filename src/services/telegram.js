@@ -35,6 +35,9 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
     `👤 @${tweet.authorUsername} (${Number(tweet.followersCount).toLocaleString()} followers)`,
   ];
   if (tweet.authorDescription) lines.push(`🪪 ${tweet.authorDescription}`);
+  if (tweet.linkedinUrl) {
+    lines.push(`💼 ${tweet.linkedinConfidence === 'high' ? 'LinkedIn' : 'Likely LinkedIn'}: ${tweet.linkedinUrl}`);
+  }
   lines.push(
     `📝 "${tweet.text}"`,
     '',
@@ -51,7 +54,10 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
   }
 
   const keyboard = Markup.inlineKeyboard([
-    [Markup.button.url('↩️ Reply on X', replyIntentUrl(tweet))],
+    [
+      Markup.button.url('↩️ Reply on X', replyIntentUrl(tweet)),
+      ...(tweet.linkedinUrl ? [Markup.button.url('💼 LinkedIn', tweet.linkedinUrl)] : []),
+    ],
     [
       Markup.button.callback('✅ Mark Replied', `replied:${tweet.id}`),
       Markup.button.callback('⏭ Skip', `skip:${tweet.id}`),

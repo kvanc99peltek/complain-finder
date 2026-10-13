@@ -26,6 +26,15 @@ const config = Object.freeze({
     botToken: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID,
   },
+  contextDev: {
+    // Optional: without it the LinkedIn lookup only uses links on the X profile
+    apiKey: process.env.CONTEXT_DEV_API_KEY || '',
+  },
+  // Our own and teammates' handles, so our replies never come back as leads
+  excludeAuthors: (process.env.EXCLUDE_AUTHORS ?? 'kvnc99peltek,CleoPayments')
+    .split(',')
+    .map((handle) => handle.trim().replace(/^@/, ''))
+    .filter(Boolean),
   pollIntervalMinutes: parseInt(process.env.POLL_INTERVAL_MINUTES || '30', 10),
   minSeverity: process.env.MIN_SEVERITY || 'medium',
   dbPath: process.env.DB_PATH || './data/complain-finder.db',

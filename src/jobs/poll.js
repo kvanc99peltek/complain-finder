@@ -1,5 +1,6 @@
 import { searchByBucket } from '../services/twitter.js';
 import { classifyTweet } from '../services/openai.js';
+import { findLinkedIn } from '../services/linkedin.js';
 import { sendNotification, isPaused } from '../services/telegram.js';
 import {
   saveTweet,
@@ -8,6 +9,7 @@ import {
   updateStatus,
   incrementMetric,
   getThreadAlertMessageId,
+  saveLinkedIn,
 } from '../db/queries.js';
 import config from '../config.js';
 import logger from '../utils/logger.js';
@@ -17,6 +19,20 @@ const SEVERITY_RANK = { low: 1, medium: 2, high: 3 };
 function meetsMinSeverity(severity) {
   const min = SEVERITY_RANK[config.minSeverity] || 2;
   return (SEVERITY_RANK[severity] || 0) >= min;
+}
+
+// Paid lookup, so only for leads worth contacting. Never blocks the alert.
+async function attachLinkedIn(tweet) {
+  if (tweet.fit !== 'medium' && tweet.fit !== 'high') return;
+  try {
+    const result = await findLinkedIn(tweet);
+    if (!result) return;
+    saveLinkedIn(tweet.id, result);
+    tweet.linkedinUrl = result.url;
+    tweet.linkedinConfidence = result.confidence;
+  } catch (err) {
+    logger.warn({ tweetId: tweet.id, err: err.message }, 'LinkedIn lookup failed');
+  }
 }
 
 let running = false;
@@ -76,6 +92,10 @@ export async function runPollCycle() {
         incrementMetric('errors');
         logger.error({ tweetId: tweet.id, err: err.message }, 'Failed to classify tweet');
       }
+    }
+
+    for (const tweet of qualified) {
+      await attachLinkedIn(tweet);
     }
 
     // 4. One ping per X thread: the first complaint alerts, the rest reply to it silently
