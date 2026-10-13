@@ -1,7 +1,7 @@
 {
   "name": "complain-finder",
   "version": "0.1.0",
-  "description": "Detect Bill.com complaints on Twitter/X, classify them, and send Telegram notifications",
+  "description": "Detect Bill.com and QuickBooks complaints on Twitter/X, classify them, and send Telegram notifications",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

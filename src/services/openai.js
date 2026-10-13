@@ -2,11 +2,20 @@ import { readFileSync } from 'fs';
 import OpenAI from 'openai';
 import config from '../config.js';
 import logger from '../utils/logger.js';
+import COMPETITORS from '../competitors.js';
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 const loadPrompt = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), 'utf-8');
-const classifyPrompt = loadPrompt('classify.txt');
+const classifyTemplate = loadPrompt('classify.txt');
+
+function classifyPrompt(bucket) {
+  const c = COMPETITORS[bucket] || COMPETITORS.billcom;
+  return classifyTemplate
+    .replace('{{notes}}', c.notes ? `\n${c.notes}` : '')
+    .replaceAll('{{competitor}}', c.name)
+    .replaceAll('{{description}}', c.description);
+}
 const linkedinMatchPrompt = loadPrompt('linkedin-match.txt');
 
 async function completeJson(systemPrompt, userContent) {
@@ -35,7 +44,7 @@ export async function classifyTweet(tweet) {
   const userContent = `Display name: ${tweet.authorName}\nAuthor bio: ${tweet.authorDescription || '(none)'}\n\nTweet: ${tweet.text}`;
 
   try {
-    const result = await completeJson(classifyPrompt, userContent);
+    const result = await completeJson(classifyPrompt(tweet.searchBucket), userContent);
     if (result.fit === 'low' && result.suggestedReply) {
       result.suggestedReply = withoutPitch(result.suggestedReply);
     }
