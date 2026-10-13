@@ -22,7 +22,7 @@ export function initDatabase() {
 
 // Applied in order; PRAGMA user_version records how many have run.
 // 001 is idempotent, so databases created before versioning start at 0 safely.
-const MIGRATIONS = ['001_initial.sql', '002_threads_fit_reply.sql'];
+const MIGRATIONS = ['001_initial.sql', '002_threads_fit_reply.sql', '003_linkedin.sql'];
 
 function runMigrations() {
   const applied = db.pragma('user_version', { simple: true });

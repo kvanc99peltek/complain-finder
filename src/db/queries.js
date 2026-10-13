@@ -7,14 +7,15 @@ export function hasSeenTweet(tweetId) {
 
 export function saveTweet(tweet) {
   return getDb().prepare(`
-    INSERT OR IGNORE INTO tweets (id, author_id, author_username, author_name, author_description, followers_count, text, created_at, conversation_id, search_bucket, status)
-    VALUES (@id, @authorId, @authorUsername, @authorName, @authorDescription, @followersCount, @text, @createdAt, @conversationId, @searchBucket, 'new')
+    INSERT OR IGNORE INTO tweets (id, author_id, author_username, author_name, author_description, author_url, followers_count, text, created_at, conversation_id, search_bucket, status)
+    VALUES (@id, @authorId, @authorUsername, @authorName, @authorDescription, @authorUrl, @followersCount, @text, @createdAt, @conversationId, @searchBucket, 'new')
   `).run({
     id: tweet.id,
     authorId: tweet.authorId,
     authorUsername: tweet.authorUsername,
     authorName: tweet.authorName,
     authorDescription: tweet.authorDescription,
+    authorUrl: tweet.authorLinks?.join(' ') || null,
     followersCount: tweet.followersCount,
     text: tweet.text,
     createdAt: tweet.createdAt,
@@ -62,6 +63,25 @@ export function updateStatus(tweetId, status, extra = {}) {
   }
 
   return getDb().prepare(`UPDATE tweets SET ${sets.join(', ')} WHERE id = @id`).run(params);
+}
+
+// Last LinkedIn lookup for this author. linkedin_source 'none' is a recorded miss,
+// so a person is searched at most once.
+export function getCachedLinkedIn(authorId) {
+  return getDb().prepare(`
+    SELECT linkedin_url AS url, linkedin_confidence AS confidence, linkedin_source AS source
+    FROM tweets
+    WHERE author_id = ? AND linkedin_source IS NOT NULL
+    ORDER BY id DESC LIMIT 1
+  `).get(authorId);
+}
+
+export function saveLinkedIn(tweetId, { url, confidence, source }) {
+  return getDb().prepare(`
+    UPDATE tweets
+    SET linkedin_url = ?, linkedin_confidence = ?, linkedin_source = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(url, confidence, source, tweetId);
 }
 
 export function getTweetById(tweetId) {

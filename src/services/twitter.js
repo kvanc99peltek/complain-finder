@@ -7,9 +7,16 @@ const client = new TwitterApi(config.twitter.bearerToken).readOnly.v2;
 
 // Broad on purpose: complaints mostly arrive as replies in threads and rarely use
 // a predictable keyword, so the classifier decides what counts, not the query.
+const excludeOurs = config.excludeAuthors.map((handle) => ` -from:${handle}`).join('');
 const BUCKETS = {
-  billcom: `("bill.com" OR @billcom OR billcom OR "bill dot com") -is:retweet lang:en`,
+  billcom: `("bill.com" OR @billcom OR billcom OR "bill dot com") -is:retweet lang:en${excludeOurs}`,
 };
+
+// Expanded links from the profile's website field and bio
+function profileLinks(author) {
+  const urls = [...(author.entities?.url?.urls || []), ...(author.entities?.description?.urls || [])];
+  return urls.map((u) => u.expanded_url || u.url).filter(Boolean);
+}
 
 function normalizeTweet(tweet, includes, bucket) {
   const author = includes?.users?.find((u) => u.id === tweet.author_id) || {};
@@ -19,6 +26,7 @@ function normalizeTweet(tweet, includes, bucket) {
     authorUsername: author.username || 'unknown',
     authorName: author.name || 'Unknown',
     authorDescription: author.description || '',
+    authorLinks: profileLinks(author),
     followersCount: author.public_metrics?.followers_count || 0,
     text: tweet.text,
     createdAt: tweet.created_at,
@@ -31,7 +39,7 @@ export async function searchQuery(query, bucket, sinceId) {
   const params = {
     max_results: 100,
     'tweet.fields': 'author_id,created_at,text,conversation_id',
-    'user.fields': 'username,name,description,public_metrics',
+    'user.fields': 'username,name,description,public_metrics,url,entities',
     expansions: 'author_id',
   };
   if (sinceId) params.since_id = sinceId;
