@@ -17,10 +17,12 @@ export function isPaused() {
 const SEVERITY_EMOJI = { low: '🟡', medium: '🟠', high: '🔴' };
 
 function replyIntentUrl(tweet) {
-  const params = new URLSearchParams({ in_reply_to: tweet.id });
-  if (tweet.suggestedReply) params.set('text', tweet.suggestedReply);
-  return `https://twitter.com/intent/tweet?${params}`;
+  return `https://twitter.com/intent/tweet?${new URLSearchParams({ in_reply_to: tweet.id })}`;
 }
+
+// X HTML-escapes tweet text; the alert is plain text, so show the real characters
+const unescapeX = (text) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
 // replyTo threads the alert under an earlier one for the same X conversation;
 // silent skips the phone notification so a busy thread pings only once.
@@ -31,28 +33,23 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
   const fitLabel = (tweet.fit || 'unknown').toUpperCase();
   const competitor = (COMPETITORS[tweet.searchBucket] || COMPETITORS.billcom).name;
 
+  // Blank lines split the alert into header, author, tweet and links
   const lines = [
-    `${emoji} ${competitor} Complaint [${intentLabel} | ${severityLabel}]`,
+    `${emoji} ${competitor} Complaint · ${intentLabel} · ${severityLabel}`,
     '',
-    `👤 @${tweet.authorUsername} (${Number(tweet.followersCount).toLocaleString()} followers)`,
+    `👤 @${tweet.authorUsername} · ${Number(tweet.followersCount).toLocaleString()} followers · fit ${fitLabel}`,
   ];
-  if (tweet.authorDescription) lines.push(`🪪 ${tweet.authorDescription}`);
-  if (tweet.linkedinUrl) {
-    lines.push(`💼 ${tweet.linkedinConfidence === 'high' ? 'LinkedIn' : 'Likely LinkedIn'}: ${tweet.linkedinUrl}`);
+  if (tweet.authorDescription) {
+    lines.push(`     ${clip(tweet.authorDescription.replace(/\s+/g, ' '), 80)}`);
   }
   lines.push(
-    `📝 "${tweet.text}"`,
     '',
-    `🎯 Cleo fit: ${fitLabel}${tweet.fitReason ? `: ${tweet.fitReason}` : ''}`,
-    `💡 ${tweet.reasoning || 'No reasoning provided'}`,
+    `📝 "${unescapeX(tweet.text)}"`,
     '',
     `🔗 Tweet: https://twitter.com/${tweet.authorUsername}/status/${tweet.id}`,
   );
   if (tweet.conversationId && tweet.conversationId !== tweet.id) {
     lines.push(`🧵 Thread: https://twitter.com/i/status/${tweet.conversationId}`);
-  }
-  if (tweet.suggestedReply) {
-    lines.push('', '✍️ Draft reply:', tweet.suggestedReply);
   }
 
   const keyboard = Markup.inlineKeyboard([
