@@ -99,8 +99,36 @@ export function getThreadAlertMessageId(conversationId) {
   return row?.telegram_message_id;
 }
 
-export function getNewTweets() {
-  return getDb().prepare("SELECT * FROM tweets WHERE status = 'new' ORDER BY created_at ASC").all();
+// Tweets still waiting for a classification and alert: new ones, plus failures
+// that have not used up their attempts. Oldest first, so a backlog drains in order.
+export function getPendingTweets(maxAttempts, limit) {
+  return getDb().prepare(`
+    SELECT * FROM tweets
+    WHERE status IN ('new', 'error') AND attempts < ?
+    ORDER BY id ASC LIMIT ?
+  `).all(maxAttempts, limit).map((row) => ({
+    id: row.id,
+    authorId: row.author_id,
+    authorUsername: row.author_username,
+    authorName: row.author_name,
+    authorDescription: row.author_description || '',
+    authorLinks: row.author_url ? row.author_url.split(' ') : [],
+    followersCount: row.followers_count,
+    text: row.text,
+    createdAt: row.created_at,
+    conversationId: row.conversation_id || row.id,
+    searchBucket: row.search_bucket,
+    attempts: row.attempts,
+  }));
+}
+
+// countAttempt is false for outages (quota, rate limits) so they never use up a tweet's retries
+export function recordFailure(tweetId, errorMessage, { countAttempt = true } = {}) {
+  return getDb().prepare(`
+    UPDATE tweets
+    SET status = 'error', error_message = ?, attempts = attempts + ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(errorMessage, countAttempt ? 1 : 0, tweetId);
 }
 
 export function getLastSinceId(bucket) {

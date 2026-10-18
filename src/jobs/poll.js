@@ -5,6 +5,8 @@ import { sendNotification, isPaused } from '../services/telegram.js';
 import {
   saveTweet,
   hasSeenTweet,
+  getPendingTweets,
+  recordFailure,
   updateClassification,
   updateStatus,
   incrementMetric,
@@ -16,6 +18,10 @@ import logger from '../utils/logger.js';
 import COMPETITORS from '../competitors.js';
 
 const SEVERITY_RANK = { low: 1, medium: 2, high: 3 };
+// A tweet that fails this many times on its own (bad output, Telegram rejecting it) is dropped
+const MAX_ATTEMPTS = 5;
+// Caps the OpenAI calls one cycle makes when a backlog comes back after an outage
+const MAX_PER_CYCLE = 300;
 const FIT_RANK = { low: 1, medium: 2, high: 3 };
 
 function meetsMinSeverity(severity) {
@@ -63,25 +69,30 @@ export async function runPollCycle() {
     const tweets = await searchByBucket();
     logger.info({ count: tweets.length }, 'Tweets fetched');
 
-    // 2. Save new tweets, collect only the ones we haven't seen
-    const newTweets = [];
+    // 2. Save new tweets
+    let newCount = 0;
     for (const tweet of tweets) {
       if (!hasSeenTweet(tweet.id)) {
         saveTweet(tweet);
         incrementMetric('tweets_detected');
-        newTweets.push(tweet);
+        newCount++;
       }
     }
-    logger.info({ newCount: newTweets.length }, 'New tweets saved');
+    logger.info({ newCount }, 'New tweets saved');
 
-    if (newTweets.length === 0) {
+    // Work from the database, so tweets that failed in an earlier cycle get another try
+    const pending = getPendingTweets(MAX_ATTEMPTS, MAX_PER_CYCLE);
+    if (pending.length === 0) {
       logger.info('No new tweets to process');
       return;
     }
+    if (pending.length > newCount) {
+      logger.info({ retrying: pending.length - newCount }, 'Retrying tweets that failed before');
+    }
 
-    // 3. Classify every new tweet before notifying, so complaints can be grouped by thread
+    // 3. Classify every pending tweet before notifying, so complaints can be grouped by thread
     const qualified = [];
-    for (const tweet of newTweets) {
+    for (const tweet of pending) {
       try {
         const classification = await classifyTweet(tweet);
         updateClassification(tweet.id, classification);
@@ -99,8 +110,15 @@ export async function runPollCycle() {
           qualified.push({ ...tweet, ...classification });
         }
       } catch (err) {
-        updateStatus(tweet.id, 'error', { errorMessage: err.message });
         incrementMetric('errors');
+        // Out of credits or rate limited: every later call fails the same way, so stop
+        // and leave the rest pending for the next cycle without using up their attempts
+        if (err.status === 429) {
+          recordFailure(tweet.id, err.message, { countAttempt: false });
+          logger.error({ err: err.message }, 'OpenAI is refusing requests; will retry next cycle');
+          break;
+        }
+        recordFailure(tweet.id, err.message);
         logger.error({ tweetId: tweet.id, err: err.message }, 'Failed to classify tweet');
       }
     }
@@ -127,7 +145,7 @@ export async function runPollCycle() {
             'Complaint notified'
           );
         } catch (err) {
-          updateStatus(tweet.id, 'error', { errorMessage: err.message });
+          recordFailure(tweet.id, err.message);
           incrementMetric('errors');
           logger.error({ tweetId: tweet.id, err: err.message }, 'Failed to notify tweet');
         }
