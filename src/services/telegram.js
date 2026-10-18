@@ -3,6 +3,7 @@ import config from '../config.js';
 import logger from '../utils/logger.js';
 import { getTweetById, updateStatus, incrementMetric, getPendingCount } from '../db/queries.js';
 import { formatDailyStats } from '../utils/metrics.js';
+import COMPETITORS from '../competitors.js';
 
 const bot = new Telegraf(config.telegram.botToken);
 const chatId = config.telegram.chatId;
@@ -28,9 +29,10 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
   const intentLabel = (tweet.intent || 'other').toUpperCase();
   const severityLabel = (tweet.severity || 'unknown').toUpperCase();
   const fitLabel = (tweet.fit || 'unknown').toUpperCase();
+  const competitor = (COMPETITORS[tweet.searchBucket] || COMPETITORS.billcom).name;
 
   const lines = [
-    `${emoji} Bill.com Complaint [${intentLabel} | ${severityLabel}]`,
+    `${emoji} ${competitor} Complaint [${intentLabel} | ${severityLabel}]`,
     '',
     `👤 @${tweet.authorUsername} (${Number(tweet.followersCount).toLocaleString()} followers)`,
   ];
