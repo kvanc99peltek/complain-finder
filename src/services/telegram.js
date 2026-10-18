@@ -17,43 +17,35 @@ export function isPaused() {
 const SEVERITY_EMOJI = { low: '🟡', medium: '🟠', high: '🔴' };
 
 function replyIntentUrl(tweet) {
-  const params = new URLSearchParams({ in_reply_to: tweet.id });
-  if (tweet.suggestedReply) params.set('text', tweet.suggestedReply);
-  return `https://twitter.com/intent/tweet?${params}`;
+  return `https://twitter.com/intent/tweet?${new URLSearchParams({ in_reply_to: tweet.id })}`;
 }
+
+// X already HTML-escapes tweet text, so decode before escaping again
+const unescapeX = (text) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const escapeHtml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
 // replyTo threads the alert under an earlier one for the same X conversation;
 // silent skips the phone notification so a busy thread pings only once.
 export async function sendNotification(tweet, { replyTo, silent = false } = {}) {
   const emoji = SEVERITY_EMOJI[tweet.severity] || '⚪';
-  const intentLabel = (tweet.intent || 'other').toUpperCase();
-  const severityLabel = (tweet.severity || 'unknown').toUpperCase();
-  const fitLabel = (tweet.fit || 'unknown').toUpperCase();
   const competitor = (COMPETITORS[tweet.searchBucket] || COMPETITORS.billcom).name;
+  const tweetUrl = `https://twitter.com/${tweet.authorUsername}/status/${tweet.id}`;
+  const followers = Number(tweet.followersCount).toLocaleString();
+
+  const links = [`<a href="${tweetUrl}">Tweet</a>`];
+  if (tweet.conversationId && tweet.conversationId !== tweet.id) {
+    links.push(`<a href="https://twitter.com/i/status/${tweet.conversationId}">Thread</a>`);
+  }
 
   const lines = [
-    `${emoji} ${competitor} Complaint [${intentLabel} | ${severityLabel}]`,
-    '',
-    `👤 @${tweet.authorUsername} (${Number(tweet.followersCount).toLocaleString()} followers)`,
+    `${emoji} <b>${competitor}</b> · ${tweet.intent || 'other'} · ${tweet.severity || 'unknown'} · fit ${tweet.fit || 'unknown'}`,
+    `👤 <b>@${escapeHtml(tweet.authorUsername)}</b> · ${followers} followers`,
   ];
-  if (tweet.authorDescription) lines.push(`🪪 ${tweet.authorDescription}`);
-  if (tweet.linkedinUrl) {
-    lines.push(`💼 ${tweet.linkedinConfidence === 'high' ? 'LinkedIn' : 'Likely LinkedIn'}: ${tweet.linkedinUrl}`);
+  if (tweet.authorDescription) {
+    lines.push(`<i>${escapeHtml(clip(tweet.authorDescription.replace(/\s+/g, ' '), 100))}</i>`);
   }
-  lines.push(
-    `📝 "${tweet.text}"`,
-    '',
-    `🎯 Cleo fit: ${fitLabel}${tweet.fitReason ? `: ${tweet.fitReason}` : ''}`,
-    `💡 ${tweet.reasoning || 'No reasoning provided'}`,
-    '',
-    `🔗 Tweet: https://twitter.com/${tweet.authorUsername}/status/${tweet.id}`,
-  );
-  if (tweet.conversationId && tweet.conversationId !== tweet.id) {
-    lines.push(`🧵 Thread: https://twitter.com/i/status/${tweet.conversationId}`);
-  }
-  if (tweet.suggestedReply) {
-    lines.push('', '✍️ Draft reply:', tweet.suggestedReply);
-  }
+  lines.push('', escapeHtml(clip(unescapeX(tweet.text), 400)), '', links.join(' · '));
 
   const keyboard = Markup.inlineKeyboard([
     [
@@ -69,6 +61,7 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
 
   const msg = await bot.telegram.sendMessage(chatId, lines.join('\n'), {
     ...keyboard,
+    parse_mode: 'HTML',
     disable_web_page_preview: true,
     disable_notification: silent,
     ...(replyTo && { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }),
@@ -98,7 +91,9 @@ async function resolveAlert(ctx, { status, metric, label }) {
   incrementMetric(metric);
 
   const who = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  // Pass the original entities back so bold text and links survive the edit
   await ctx.editMessageText(`${message.text}\n\n${label} by ${who}`, {
+    entities: message.entities,
     link_preview_options: { is_disabled: true },
   });
   await ctx.answerCbQuery(label);
