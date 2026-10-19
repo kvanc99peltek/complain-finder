@@ -1,23 +1,21 @@
 import { searchByBucket } from '../services/twitter.js';
 import { classifyTweet } from '../services/openai.js';
 import { findLinkedIn } from '../services/linkedin.js';
-import { sendNotification, isPaused } from '../services/telegram.js';
+import { isPaused } from '../services/telegram.js';
+import { dispatchAlerts, SEVERITY_RANK } from './alerts.js';
 import {
   saveTweet,
   hasSeenTweet,
   getPendingTweets,
   recordFailure,
   updateClassification,
-  updateStatus,
   incrementMetric,
-  getThreadAlertMessageId,
   saveLinkedIn,
 } from '../db/queries.js';
 import config from '../config.js';
 import logger from '../utils/logger.js';
 import COMPETITORS from '../competitors.js';
 
-const SEVERITY_RANK = { low: 1, medium: 2, high: 3 };
 // A tweet that fails this many times on its own (bad output, Telegram rejecting it) is dropped
 const MAX_ATTEMPTS = 5;
 // Caps the OpenAI calls one cycle makes when a backlog comes back after an outage
@@ -127,30 +125,8 @@ export async function runPollCycle() {
       await attachLinkedIn(tweet);
     }
 
-    // 4. One ping per X thread: the first complaint alerts, the rest reply to it silently
-    const byThread = Map.groupBy(qualified, (tweet) => tweet.conversationId);
-    for (const [conversationId, threadTweets] of byThread) {
-      threadTweets.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
-      let replyTo = getThreadAlertMessageId(conversationId);
-
-      for (const tweet of threadTweets) {
-        try {
-          const telegramMsgId = await sendNotification(tweet, { replyTo, silent: Boolean(replyTo) });
-          replyTo ??= telegramMsgId;
-          updateStatus(tweet.id, 'notified', { telegramMessageId: telegramMsgId });
-          incrementMetric('notified');
-
-          logger.info(
-            { tweetId: tweet.id, severity: tweet.severity, intent: tweet.intent, fit: tweet.fit },
-            'Complaint notified'
-          );
-        } catch (err) {
-          recordFailure(tweet.id, err.message);
-          incrementMetric('errors');
-          logger.error({ tweetId: tweet.id, err: err.message }, 'Failed to notify tweet');
-        }
-      }
-    }
+    // 4. One alert per thread and per author cooldown; the rest update that alert
+    await dispatchAlerts(qualified);
 
     logger.info('Poll cycle completed');
   } catch (err) {

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/index.js | pino-pretty",
+    "test": "node --test test/*.test.js",
     "test:twitter": "node scripts/test-twitter.js",
     "test:openai": "node scripts/test-openai.js",
     "test:telegram": "node scripts/test-telegram.js",
