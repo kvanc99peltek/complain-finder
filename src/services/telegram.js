@@ -1,7 +1,14 @@
 import { Telegraf, Markup } from 'telegraf';
 import config from '../config.js';
 import logger from '../utils/logger.js';
-import { getTweetById, updateStatus, incrementMetric, getPendingCount } from '../db/queries.js';
+import {
+  getTweetById,
+  updateStatus,
+  incrementMetric,
+  getPendingCount,
+  getAlertUpdates,
+  rowToTweet,
+} from '../db/queries.js';
 import { formatDailyStats } from '../utils/metrics.js';
 import COMPETITORS from '../competitors.js';
 
@@ -24,9 +31,18 @@ function replyIntentUrl(tweet) {
 const unescapeX = (text) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
-// replyTo threads the alert under an earlier one for the same X conversation;
-// silent skips the phone notification so a busy thread pings only once.
-export async function sendNotification(tweet, { replyTo, silent = false } = {}) {
+// Labels stamped on an alert once someone taps a button, keyed by button action
+const RESOLUTIONS = {
+  replied: { status: 'replied', metric: 'replied', label: '✅ Replied' },
+  skip: { status: 'skipped', metric: 'skipped', label: '⏭ Skipped' },
+  false: { status: 'not_complaint', metric: 'false_positives', label: '❌ Not a complaint' },
+};
+
+const tweetUrl = (username, id) => `https://twitter.com/${username}/status/${id}`;
+
+// updates is getAlertUpdates() for this alert; handled is { label, by } once someone
+// tapped a button, which also drops the keyboard as the tap did.
+export function buildAlert(tweet, { updates, handled } = {}) {
   const emoji = SEVERITY_EMOJI[tweet.severity] || '⚪';
   const intentLabel = (tweet.intent || 'other').toUpperCase();
   const severityLabel = (tweet.severity || 'unknown').toUpperCase();
@@ -46,10 +62,18 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
     '',
     `📝 "${unescapeX(tweet.text)}"`,
     '',
-    `🔗 Tweet: https://twitter.com/${tweet.authorUsername}/status/${tweet.id}`,
+    `🔗 Tweet: ${tweetUrl(tweet.authorUsername, tweet.id)}`,
   );
   if (tweet.conversationId && tweet.conversationId !== tweet.id) {
     lines.push(`🧵 Thread: https://twitter.com/i/status/${tweet.conversationId}`);
+  }
+  if (updates?.count > 0) {
+    const noun = updates.count === 1 ? 'update' : 'updates';
+    lines.push('', `🧵 ${updates.count} more ${noun} · latest: ${tweetUrl(updates.latestUsername, updates.latestId)}`);
+  }
+  if (handled) {
+    lines.push('', handled.by ? `${handled.label} by ${handled.by}` : handled.label);
+    return { text: lines.join('\n'), keyboard: {} };
   }
 
   const keyboard = Markup.inlineKeyboard([
@@ -63,15 +87,39 @@ export async function sendNotification(tweet, { replyTo, silent = false } = {}) 
       Markup.button.callback('❌ Not a Complaint', `false:${tweet.id}`),
     ],
   ]);
+  return { text: lines.join('\n'), keyboard };
+}
 
-  const msg = await bot.telegram.sendMessage(chatId, lines.join('\n'), {
+export async function sendNotification(tweet) {
+  const { text, keyboard } = buildAlert(tweet);
+  const msg = await bot.telegram.sendMessage(chatId, text, {
     ...keyboard,
     disable_web_page_preview: true,
-    disable_notification: silent,
-    ...(replyTo && { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }),
   });
-
   return msg.message_id;
+}
+
+// Rebuilds an alert from its database row, so the update line can change
+// without losing the keyboard or the "handled by" stamp.
+export function renderAlertRow(row) {
+  const tweet = {
+    ...rowToTweet(row),
+    severity: row.severity,
+    intent: row.intent,
+    fit: row.fit,
+    linkedinUrl: row.linkedin_url,
+  };
+  const resolution = Object.values(RESOLUTIONS).find((r) => r.status === row.status);
+  const handled = resolution && { label: resolution.label, by: row.handled_by };
+  return buildAlert(tweet, { updates: getAlertUpdates(row.id), handled });
+}
+
+export async function editAlert(row) {
+  const { text, keyboard } = renderAlertRow(row);
+  await bot.telegram.editMessageText(chatId, row.telegram_message_id, undefined, text, {
+    ...keyboard,
+    link_preview_options: { is_disabled: true },
+  });
 }
 
 // In a group several people see the same alert, so the first tap wins and the
@@ -91,10 +139,11 @@ async function resolveAlert(ctx, { status, metric, label }) {
     return;
   }
 
-  updateStatus(tweetId, status);
+  const who = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  // handled_by lets a later update line rebuild the stamp
+  updateStatus(tweetId, status, { handledBy: who });
   incrementMetric(metric);
 
-  const who = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
   await ctx.editMessageText(`${message.text}\n\n${label} by ${who}`, {
     link_preview_options: { is_disabled: true },
   });
@@ -103,14 +152,9 @@ async function resolveAlert(ctx, { status, metric, label }) {
 }
 
 function setupCallbacks() {
-  bot.action(/^replied:(.+)$/, (ctx) =>
-    resolveAlert(ctx, { status: 'replied', metric: 'replied', label: '✅ Replied' }));
-
-  bot.action(/^skip:(.+)$/, (ctx) =>
-    resolveAlert(ctx, { status: 'skipped', metric: 'skipped', label: '⏭ Skipped' }));
-
-  bot.action(/^false:(.+)$/, (ctx) =>
-    resolveAlert(ctx, { status: 'not_complaint', metric: 'false_positives', label: '❌ Not a complaint' }));
+  for (const [action, resolution] of Object.entries(RESOLUTIONS)) {
+    bot.action(new RegExp(`^${action}:(.+)$`), (ctx) => resolveAlert(ctx, resolution));
+  }
 }
 
 function setupCommands() {

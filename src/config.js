@@ -37,6 +37,8 @@ const config = Object.freeze({
     .filter(Boolean),
   pollIntervalMinutes: parseInt(process.env.POLL_INTERVAL_MINUTES || '30', 10),
   minSeverity: process.env.MIN_SEVERITY || 'medium',
+  // An author alerted this recently updates that alert instead of pinging again; 0 turns it off
+  authorCooldownHours: parseFloat(process.env.AUTHOR_COOLDOWN_HOURS || '24'),
   dbPath: process.env.DB_PATH || './data/complain-finder.db',
   logLevel: process.env.LOG_LEVEL || 'info',
 });

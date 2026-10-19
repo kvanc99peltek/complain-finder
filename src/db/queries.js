@@ -61,6 +61,13 @@ export function updateStatus(tweetId, status, extra = {}) {
     sets.push('error_message = @errorMessage');
     params.errorMessage = extra.errorMessage;
   }
+  if (extra.handledBy !== undefined) {
+    sets.push('handled_by = @handledBy');
+    params.handledBy = extra.handledBy;
+  }
+  if (status === 'notified') {
+    sets.push("notified_at = datetime('now')");
+  }
 
   return getDb().prepare(`UPDATE tweets SET ${sets.join(', ')} WHERE id = @id`).run(params);
 }
@@ -88,25 +95,48 @@ export function getTweetById(tweetId) {
   return getDb().prepare('SELECT * FROM tweets WHERE id = ?').get(tweetId);
 }
 
-// Telegram message of the first alert sent for a thread, so later complaints
-// in the same conversation can be threaded under it instead of pinging again.
-export function getThreadAlertMessageId(conversationId) {
+// The alert a thread's complaints are folded into: the first message sent for the
+// conversation, or the alert its earlier tweets were folded into.
+export function getThreadAlert(conversationId) {
   const row = getDb().prepare(`
-    SELECT telegram_message_id FROM tweets
-    WHERE conversation_id = ? AND telegram_message_id IS NOT NULL
-    ORDER BY id ASC LIMIT 1
+    SELECT COALESCE(alert_tweet_id, id) AS alert_id FROM tweets
+    WHERE conversation_id = ? AND (telegram_message_id IS NOT NULL OR alert_tweet_id IS NOT NULL)
+    ORDER BY telegram_message_id IS NULL, id ASC LIMIT 1
   `).get(conversationId);
-  return row?.telegram_message_id;
+  return row && getTweetById(row.alert_id);
 }
 
-// Tweets still waiting for a classification and alert: new ones, plus failures
-// that have not used up their attempts. Oldest first, so a backlog drains in order.
-export function getPendingTweets(maxAttempts, limit) {
+// The author's latest alert inside the cooldown, so a new thread from the same
+// person updates it instead of pinging again. Rows alerted before notified_at
+// existed fall back to detected_at.
+export function getRecentAuthorAlert(authorId, hours) {
+  if (!(hours > 0)) return undefined;
   return getDb().prepare(`
     SELECT * FROM tweets
-    WHERE status IN ('new', 'error') AND attempts < ?
-    ORDER BY id ASC LIMIT ?
-  `).all(maxAttempts, limit).map((row) => ({
+    WHERE author_id = ? AND telegram_message_id IS NOT NULL
+      AND COALESCE(notified_at, detected_at) >= datetime('now', ?)
+    ORDER BY COALESCE(notified_at, detected_at) DESC, id DESC LIMIT 1
+  `).get(authorId, `-${hours} hours`);
+}
+
+// status is 'thread_update' or 'author_update'; no message is sent for either
+export function recordAlertUpdate(tweetId, alertTweetId, status) {
+  return getDb().prepare(`
+    UPDATE tweets SET status = ?, alert_tweet_id = ?, updated_at = datetime('now') WHERE id = ?
+  `).run(status, alertTweetId, tweetId);
+}
+
+// How many tweets were folded into an alert, and the newest of them
+export function getAlertUpdates(alertTweetId) {
+  return getDb().prepare(`
+    SELECT COUNT(*) AS count, MAX(id) AS latestId,
+      (SELECT author_username FROM tweets WHERE alert_tweet_id = @id ORDER BY id DESC LIMIT 1) AS latestUsername
+    FROM tweets WHERE alert_tweet_id = @id
+  `).get({ id: alertTweetId });
+}
+
+export function rowToTweet(row) {
+  return {
     id: row.id,
     authorId: row.author_id,
     authorUsername: row.author_username,
@@ -119,7 +149,17 @@ export function getPendingTweets(maxAttempts, limit) {
     conversationId: row.conversation_id || row.id,
     searchBucket: row.search_bucket,
     attempts: row.attempts,
-  }));
+  };
+}
+
+// Tweets still waiting for a classification and alert: new ones, plus failures
+// that have not used up their attempts. Oldest first, so a backlog drains in order.
+export function getPendingTweets(maxAttempts, limit) {
+  return getDb().prepare(`
+    SELECT * FROM tweets
+    WHERE status IN ('new', 'error') AND attempts < ?
+    ORDER BY id ASC LIMIT ?
+  `).all(maxAttempts, limit).map(rowToTweet);
 }
 
 // countAttempt is false for outages (quota, rate limits) so they never use up a tweet's retries
@@ -165,5 +205,6 @@ export function getDailyMetrics(date) {
     skipped: 0,
     false_positives: 0,
     errors: 0,
+    alert_updates: 0,
   };
 }

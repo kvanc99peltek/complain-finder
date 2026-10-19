@@ -9,6 +9,7 @@ export function formatDailyStats(date) {
     `🚨 Complaints found: ${m.complaints_found}`,
     `✅ Qualified (medium+): ${m.qualified_complaints}`,
     `📬 Notified: ${m.notified}`,
+    `🧵 Folded into earlier alerts: ${m.alert_updates}`,
     `💬 Replied: ${m.replied}`,
     `⏭ Skipped: ${m.skipped}`,
     `❌ False positives: ${m.false_positives}`,
